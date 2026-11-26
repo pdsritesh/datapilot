@@ -1,5 +1,3 @@
-
-
 # """
 # Step 4: SQL Generator (RAG + LangChain version)
 
@@ -635,6 +633,22 @@ def _mock_generate(resolved_intent: str, retrieved_examples: list) -> GeneratorR
                                 "No similar examples retrieved — returned default view.")
 
     best = retrieved_examples[0]
+
+    # FIX (2026-11-26): only adapt an example if the query actually shares
+    # meaningful words with it. Vector search ALWAYS returns a nearest
+    # neighbour, even for nonsense like "swfse", so without this check the
+    # mock generator answered anything with a random example's SQL.
+    _stop = {"the", "a", "an", "of", "in", "on", "for", "to", "is", "are", "me", "my",
+             "and", "or", "all", "show", "list", "get", "what", "who", "which", "how", "there"}
+    def _norm(w): return w[:-1] if w.endswith("s") and len(w) > 3 else w
+    q_words = {_norm(w) for w in re.findall(r"[a-z]+", lowered)} - _stop
+    ex_words = {_norm(w) for w in re.findall(r"[a-z]+", (best["question"] + " " + best["sql"]).lower())}
+    if not (q_words & ex_words):
+        return GeneratorResult(
+            "", "low",
+            "Couldn't match this question to anything in the data. Try asking about customers, orders or revenue.",
+        )
+
     sql = best["sql"]
 
     # naive placeholder fill for the "orders from a specific customer" template

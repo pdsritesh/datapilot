@@ -178,20 +178,26 @@
 
 
 # class GuardrailResult:
-#     def __init__(self, passed: bool, reason: str = ""):
+#     def __init__(self, passed: bool, reason: str = "", category: str = None):
 #         self.passed = passed
 #         self.reason = reason
+#         # category lets callers (pipeline.py's logging, the /tracing
+#         # page's breakdown chart) distinguish WHICH rule fired, not
+#         # just that something did — e.g. "80% of this week's blocks
+#         # were injection attempts vs destructive intent" becomes a
+#         # answerable question instead of needing to re-parse messages.
+#         self.category = category
 
 #     def __repr__(self):
-#         return f"GuardrailResult(passed={self.passed}, reason='{self.reason}')"
+#         return f"GuardrailResult(passed={self.passed}, reason='{self.reason}', category={self.category!r})"
 
 
 # def check_input(query: str) -> GuardrailResult:
 #     if not query or not query.strip():
-#         return GuardrailResult(False, "Empty query")
+#         return GuardrailResult(False, "Empty query", category="empty")
 
 #     if len(query) > MAX_QUERY_LENGTH:
-#         return GuardrailResult(False, f"Query too long (max {MAX_QUERY_LENGTH} chars)")
+#         return GuardrailResult(False, f"Query too long (max {MAX_QUERY_LENGTH} chars)", category="too_long")
 
 #     lowered = query.lower()
 #     leet = _leet_normalize(lowered)                        # digits/symbols normalized, spacing kept
@@ -201,21 +207,21 @@
 #     # 1. SQL-syntax injection, including obfuscated/spaced-out variants
 #     for pattern in COLLAPSED_INJECTION_PATTERNS:
 #         if re.search(pattern, collapsed):
-#             return GuardrailResult(False, "Query blocked: potentially unsafe content detected")
+#             return GuardrailResult(False, "Query blocked: potentially unsafe content detected", category="injection")
 
 #     # 2. Jailbreak / prompt-injection framing (word-boundary phrases)
 #     for pattern in PHRASE_INJECTION_PATTERNS:
 #         if re.search(pattern, deobfuscated):
-#             return GuardrailResult(False, "Query blocked: potentially unsafe content detected")
+#             return GuardrailResult(False, "Query blocked: potentially unsafe content detected", category="jailbreak")
 
 #     # 3. Plain-English destructive/write intent — no SQL keywords needed
 #     for pattern in DESTRUCTIVE_INTENT_PATTERNS:
 #         if re.search(pattern, deobfuscated):
-#             return GuardrailResult(False, "Query blocked: this looks like a request to modify or delete data, which isn't supported")
+#             return GuardrailResult(False, "Query blocked: this looks like a request to modify or delete data, which isn't supported", category="destructive_intent")
 
 #     for pattern in NON_DATA_PATTERNS:
 #         if re.match(pattern, lowered.strip()):
-#             return GuardrailResult(False, "This doesn't look like a data question")
+#             return GuardrailResult(False, "This doesn't look like a data question", category="non_data")
 
 #     # 4. Off-topic / out-of-scope — only blocks when an off-topic signal
 #     # fires AND no domain-relevant term is present, so a question like
@@ -224,7 +230,7 @@
 #     has_off_topic_signal = any(re.search(pattern, deobfuscated) for pattern in OFF_TOPIC_PATTERNS)
 #     has_domain_hint = any(term in lowered for term in DOMAIN_HINT_TERMS)
 #     if has_off_topic_signal and not has_domain_hint:
-#         return GuardrailResult(False, "This doesn't look like a question about the mall purchase data")
+#         return GuardrailResult(False, "This doesn't look like a question about the mall purchase data", category="off_topic")
 
 #     return GuardrailResult(True)
 
@@ -261,6 +267,7 @@
 #     ]
 #     for t in tests:
 #         print(f"{t!r:70} -> {check_input(t)}")
+
 
 
 
@@ -443,6 +450,48 @@ DOMAIN_HINT_TERMS = [
 ]
 
 
+# --- Gibberish / unrelated-query detection ------------------------------
+# FIX (2026-11-26): a keyboard-mash query like "swfse" passed every check
+# above and ran the full pipeline, because nothing required a query to be
+# a real, data-related question. In mock mode the generator then "adapted"
+# the nearest RAG example and returned 90 rows for nonsense.
+
+# Generic words that signal a data question even when no domain term appears
+DATA_INTENT_WORDS = {
+    "show", "list", "get", "find", "give", "display", "count", "total", "sum",
+    "average", "avg", "mean", "max", "min", "top", "bottom", "most", "least",
+    "highest", "lowest", "best", "worst", "how", "many", "much", "which", "what",
+    "who", "when", "where", "per", "each", "number", "between", "latest",
+    "recent", "recently", "oldest", "newest", "biggest", "largest", "smallest",
+}
+
+
+def _looks_like_gibberish(text: str) -> bool:
+    """True if no word in the query looks like a pronounceable word."""
+    words = re.findall(r"[a-z]{2,}", text.lower())
+    if not words:
+        return True
+
+    def bad(w: str) -> bool:
+        if not re.search(r"[aeiouy]", w):                  # "sdfg"
+            return True
+        if re.search(r"[^aeiouy]{5,}", w):                 # 5+ consonants in a row
+            return True
+        if len(w) >= 4 and len(set(w)) <= 2:               # "aaaa", "ababab"
+            return True
+        return False
+
+    return all(bad(w) for w in words)
+
+
+def _matches_vocab(tokens: set, vocab) -> bool:
+    """Token match with naive plural handling (orders ~ order)."""
+    for t in tokens:
+        if t in vocab or t.rstrip("s") in vocab or (t + "s") in vocab:
+            return True
+    return False
+
+
 class GuardrailResult:
     def __init__(self, passed: bool, reason: str = "", category: str = None):
         self.passed = passed
@@ -458,7 +507,13 @@ class GuardrailResult:
         return f"GuardrailResult(passed={self.passed}, reason='{self.reason}', category={self.category!r})"
 
 
-def check_input(query: str) -> GuardrailResult:
+def check_input(query: str, connected_db: bool = False) -> GuardrailResult:
+    """
+    connected_db: True when the session is connected to a user's own
+    PostgreSQL database. DOMAIN_HINT_TERMS describe the demo mall dataset
+    only, so the domain-relevance gate is skipped there (the gibberish
+    check still applies).
+    """
     if not query or not query.strip():
         return GuardrailResult(False, "Empty query", category="empty")
 
@@ -497,6 +552,19 @@ def check_input(query: str) -> GuardrailResult:
     has_domain_hint = any(term in lowered for term in DOMAIN_HINT_TERMS)
     if has_off_topic_signal and not has_domain_hint:
         return GuardrailResult(False, "This doesn't look like a question about the mall purchase data", category="off_topic")
+
+    # 5. Gibberish — nothing in the query is a pronounceable word
+    if _looks_like_gibberish(lowered):
+        return GuardrailResult(False, "I couldn't understand that. Try asking a question about your data.", category="gibberish")
+
+    # 6. Relevance gate (demo dataset only): must mention a domain term or
+    # contain a recognizable data-question word. Blocks things like "swfse"
+    # or "banana" instead of letting the generator guess.
+    if not connected_db:
+        tokens = set(re.findall(r"[a-z]+", lowered))
+        vocab = set(DOMAIN_HINT_TERMS) | DATA_INTENT_WORDS
+        if not _matches_vocab(tokens, vocab):
+            return GuardrailResult(False, "That doesn't look related to the mall purchase data. Try asking about customers, orders, revenue or cities.", category="unrelated")
 
     return GuardrailResult(True)
 
