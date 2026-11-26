@@ -11,3 +11,15 @@ wheels/
 .env
 .env.*
 !.env.example
+
+
+# Generated vector databases
+chroma_store/
+qdrant_store/
+
+# Logs
+*.log
+*.jsonl
+
+# Local databases
+*.db
