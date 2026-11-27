@@ -1,25 +1,33 @@
-# Python-generated files
+# secrets
+.env
+.env.*
+!.env.example
+
+# python
 __pycache__/
 *.py[oc]
 build/
 dist/
 wheels/
 *.egg-info
+.venv/
+.pytest_cache/
 
-# Virtual environments
-.venv
-.env
-.env.*
-!.env.example
-
-
-# Generated vector databases
+# generated vector databases
 chroma_store/
 qdrant_store/
 
-# Logs
+# logs and runtime output
 *.log
 *.jsonl
+backend/logs/
 
-# Local databases
+# local databases
 *.db
+
+# frontend
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+.vercel/
