@@ -9,6 +9,10 @@ Self-correction: generate_sql(..., feedback={"previous_sql": ..., "error": ...})
 re-prompts the model with the failed SQL and the validator/DB error. pipeline.py
 uses this for its retry loop.
 
+Refusal: the prompt tells the model to return empty SQL for unintelligible or
+unanswerable questions instead of guessing; pipeline.py turns that into a
+user-facing "couldn't generate a query" error.
+
 In mock mode (no GROQ_API_KEY), falls back to template matching against the
 same few-shot example corpus so the pipeline still runs without an API key.
 """
@@ -50,6 +54,10 @@ Rules:
   aggregate (HAVING COUNT(...) > n), also include that aggregate value.
 - If you need intermediate results (e.g. compare against an average), use
   CTEs or subqueries.
+- If the question is unintelligible, is not a data question, or cannot be
+  answered from the retrieved schema, return "sql": "" and explain why in
+  assumptions_made. NEVER guess a default query such as SELECT * FROM <table>
+  to be helpful.
 - Always include a LIMIT clause (default 100 if not specified).
 - Respond ONLY with strict JSON, no markdown:
 {{
@@ -270,10 +278,12 @@ def generate_sql(resolved_intent: str, run_config: dict = None, session_id: str 
         }, **invoke_kwargs)
         sql = result.get("sql", "")
         if not sql:
+            # Either a deliberate refusal (see the prompt) or a bad response.
+            # The reason is in assumptions_made and gets shown to the user.
             log_run({
                 "stage_failed": "generator",
                 "success": False,
-                "error_type": "LLM returned JSON with empty 'sql' field",
+                "error_type": "LLM returned empty 'sql' (refusal or bad response)",
                 "resolved_intent": resolved_intent,
                 "raw_result": result,
             })
@@ -293,5 +303,5 @@ def generate_sql(resolved_intent: str, run_config: dict = None, session_id: str 
 
 
 if __name__ == "__main__":
-    intent = "who is my best customer? (clarified: Total revenue)"
-    print(generate_sql(intent))
+    print(generate_sql("who is my best customer? (clarified: Total revenue)"))
+    print(generate_sql("erf werf"))
