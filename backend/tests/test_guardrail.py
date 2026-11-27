@@ -36,3 +36,11 @@ def test_real_questions_pass(q):
 ])
 def test_unsafe_inputs_blocked(q):
     assert not check_input(q).passed
+
+
+@pytest.mark.parametrize("q", [
+    "has Krishna Sharma ever ordered Kids Story Set?",
+    "which cities have the most customers?",
+])
+def test_inflected_words_pass(q):
+    assert check_input(q).passed

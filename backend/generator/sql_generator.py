@@ -48,10 +48,13 @@ Rules:
 - Write syntax valid for {dialect_name} specifically (e.g. date/time
   functions, LIMIT/OFFSET, quoting) — not a different SQL dialect's syntax.
 - Select only the columns needed to answer the question; avoid SELECT *.
-  But: include a name/identifier column so each row is understandable;
-  when the question ranks or sorts rows (newest, oldest, top, most/least
-  expensive), also include the column you sorted by; when you filter on an
-  aggregate (HAVING COUNT(...) > n), also include that aggregate value.
+  Single-value questions (average, total, count, max/min over everything in
+  scope) must return just that one value — do NOT group by customer or item
+  unless the question says "per" or "for each". For listing questions, include
+  a name column so rows are understandable; when the question ranks or sorts
+  rows (newest, oldest, top, most/least expensive), also include the column you
+  sorted by; when you filter on an aggregate (HAVING COUNT(...) > n), also
+  include that aggregate value.
 - If you need intermediate results (e.g. compare against an average), use
   CTEs or subqueries.
 - If the question is unintelligible, is not a data question, or cannot be

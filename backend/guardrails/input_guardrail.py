@@ -166,9 +166,20 @@ def _looks_like_gibberish(text: str) -> bool:
 
 
 def _matches_vocab(tokens: set, vocab) -> bool:
-    """Token match with naive plural handling (orders ~ order)."""
+    """
+    Token match with plural/inflection handling, so "orders", "ordered" and
+    "cities" all match "order" / "city". Prefix matching only applies to vocab
+    words of 5+ letters, so short words like "what" or "show" don't turn
+    "whatever" or "showroom" into a match.
+    """
     for t in tokens:
-        if t in vocab or t.rstrip("s") in vocab or (t + "s") in vocab:
+        candidates = {t, t.rstrip("s"), t + "s"}
+        if t.endswith("ies"):
+            candidates.add(t[:-3] + "y")
+        if any(c in vocab for c in candidates):
+            return True
+        # ordered/ordering -> order, spending -> spend
+        if any(len(v) >= 5 and t.startswith(v) for v in vocab):
             return True
     return False
 
